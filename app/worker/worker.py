@@ -41,6 +41,34 @@ def send_to_ocr(file_path: str) -> dict:
     return result
 
 
+def process_document_by_key(doc_id: str, bucket: str, key: str):
+    """Process a document directly by bucket/key (called from webhook)."""
+    logger.info("=== Processing document id=%s bucket=%s key=%s ===", doc_id, bucket, key)
+    update_document(doc_id, "processing")
+
+    file_path = None
+    try:
+        file_path = download_from_supabase(bucket, key)
+
+        ocr_result = send_to_ocr(file_path)
+
+        ocr_data = ocr_result.get("data", [])
+        if ocr_data:
+            insert_ocr_result(doc_id, ocr_data)
+
+        update_document(doc_id, "completed")
+        logger.info("=== Document id=%s completed ===", doc_id)
+
+    except Exception as e:
+        logger.exception("Error processing document id=%s: %s", doc_id, e)
+        update_document(doc_id, "error", error=str(e))
+
+    finally:
+        if file_path and os.path.exists(file_path):
+            os.unlink(file_path)
+            logger.info("Cleaned up temp file: %s", file_path)
+
+
 def process_document(doc: dict):
     doc_id = doc["id"]
     bucket = doc["bucket"]

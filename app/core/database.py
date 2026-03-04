@@ -10,12 +10,14 @@ logger.info("Supabase client initialized")
 
 def insert_document(bucket: str, key: str):
     logger.info("Inserting document: bucket=%s key=%s", bucket, key)
-    supabase.table("documents").insert({
+    result = supabase.table("documents").insert({
         "bucket": bucket,
         "key": key,
         "status": "pending"
     }).execute()
-    logger.info("Document inserted with status=pending")
+    doc = result.data[0] if result.data else None
+    logger.info("Document inserted with status=pending, id=%s", doc.get("id") if doc else "unknown")
+    return doc
 
 
 def get_next_pending_document():

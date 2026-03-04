@@ -3,7 +3,7 @@ import time
 import tempfile
 import requests
 from supabase import create_client
-from app.core.database import get_next_pending_document, update_document
+from app.core.database import get_next_pending_document, update_document, insert_ocr_result
 from app.core.config import OCR_URL
 from app.core.config import SUPABASE_URL, SUPABASE_SERVICE_KEY
 
@@ -48,7 +48,13 @@ def process_document(doc: dict):
         ocr_result = send_to_ocr(file_path)
         print(f"  OCR completed successfully")
 
-        update_document(doc_id, "completed", ocr_result=ocr_result)
+        # Store OCR results in separate table
+        ocr_data = ocr_result.get("data", [])
+        if ocr_data:
+            insert_ocr_result(doc_id, ocr_data)
+            print(f"  Inserted {len(ocr_data)} OCR result(s)")
+
+        update_document(doc_id, "completed")
         print(f"  Document marked as completed")
 
     except Exception as e:

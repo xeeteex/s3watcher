@@ -20,11 +20,25 @@ def get_next_pending_document():
     return None
 
 
-def update_document(id: str, status: str, ocr_result=None, error=None):
+def update_document(id: str, status: str, error=None):
 
     payload = {"status": status}
-    if ocr_result:
-        payload["ocr_result"] = ocr_result
     if error:
         payload["error"] = error
     supabase.table("documents").update(payload).eq("id", id).execute()
+
+
+def insert_ocr_result(document_id: str, ocr_data: list):
+    """Insert OCR results into the ocr_results table.
+    ocr_data is the 'data' array from the OCR response.
+    Each item has file_name, content, and extracted_text.
+    """
+    rows = []
+    for item in ocr_data:
+        rows.append({
+            "document_id": document_id,
+            "file_name": item.get("file_name"),
+            "content": item.get("content"),
+            "extracted_text": item.get("extracted_text"),
+        })
+    supabase.table("ocr_results").insert(rows).execute()

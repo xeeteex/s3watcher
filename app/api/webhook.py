@@ -1,7 +1,8 @@
 import logging
 from fastapi import APIRouter
-from app.core.database import insert_document
-from app.worker.worker import drain_queue
+from app.core.database import insert_document, update_document, insert_ocr_result
+from app.worker.worker import download_from_supabase, send_to_ocr
+import os
 
 logger = logging.getLogger("app.webhook")
 
@@ -21,15 +22,45 @@ async def storage_webhook(payload: dict):
         logger.warning("Ignored: missing bucket_id or name in record: %s", record)
         return {"status": "ignored"}
 
+    # 1. Insert as pending
     logger.info("Inserting document: bucket=%s key=%s", bucket, key)
     doc = insert_document(bucket, key)
-    logger.info("Document queued: id=%s", doc.get("id") if doc else "unknown")
+    doc_id = doc.get("id") if doc else None
+    logger.info("Document queued: id=%s", doc_id)
 
-    # Drain the queue: claim and process pending docs one-by-one
-    processed = drain_queue()
-    logger.info("Queue drained: %d document(s) processed", processed)
+    if not doc_id:
+        return {"status": "error", "detail": "Failed to insert document"}
 
-    return {"status": "accepted", "queued_id": doc.get("id") if doc else None, "processed": processed}
+    # 2. Process THIS document only (no queue draining)
+    update_document(doc_id, "processing")
+    file_path = None
+    try:
+        logger.info("Downloading: bucket=%s key=%s", bucket, key)
+        file_path = download_from_supabase(bucket, key)
+        logger.info("Downloaded %d bytes", os.path.getsize(file_path))
+
+        logger.info("Sending to OCR: %s", key)
+        ocr_result = send_to_ocr(file_path, filename=key)
+        logger.info("OCR completed for %s", key)
+
+        ocr_data = ocr_result.get("data", [])
+        if ocr_data:
+            insert_ocr_result(doc_id, ocr_data)
+            logger.info("Inserted %d OCR result(s) for id=%s", len(ocr_data), doc_id)
+
+        update_document(doc_id, "completed")
+        logger.info("Document id=%s completed", doc_id)
+        return {"status": "completed", "id": doc_id}
+
+    except Exception as e:
+        logger.exception("Error processing document id=%s: %s", doc_id, e)
+        update_document(doc_id, "error", error=str(e))
+        return {"status": "error", "id": doc_id, "detail": str(e)}
+
+    finally:
+        if file_path and os.path.exists(file_path):
+            os.unlink(file_path)
+            logger.info("Cleaned up temp file")
 
 
 

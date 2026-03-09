@@ -1,7 +1,7 @@
 import logging
 from fastapi import APIRouter
-from app.core.database import insert_document, update_document, insert_ocr_result
-from app.worker.worker import download_from_supabase, send_to_ocr, process_document
+from app.core.database import insert_document
+from app.worker.worker import process_document
 import os
 
 logger = logging.getLogger("app.webhook")
@@ -31,7 +31,6 @@ async def storage_webhook(payload: dict):
     if not doc_id:
         return {"status": "error", "detail": "Failed to insert document"}
 
-    # 2. Process THIS document only (no queue draining)
     # update_document(doc_id, "processing")
     # file_path = None
     # try:

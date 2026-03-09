@@ -20,15 +20,15 @@ def insert_document(bucket: str, key: str):
     return doc
 
 
-def get_next_pending_document():
-    logger.info("Claiming next pending document...")
-    result = supabase.rpc("claim_next_document").execute()
-    if result.data:
-        doc = result.data[0]
-        logger.info("Claimed document: id=%s bucket=%s key=%s", doc.get("id"), doc.get("bucket"), doc.get("key"))
-        return doc
-    logger.info("No pending documents found")
-    return None
+# def get_next_pending_document():
+#     logger.info("Claiming next pending document...")
+#     result = supabase.rpc("claim_next_document").execute()
+#     if result.data:
+#         doc = result.data[0]
+#         logger.info("Claimed document: id=%s bucket=%s key=%s", doc.get("id"), doc.get("bucket"), doc.get("key"))
+#         return doc
+#     logger.info("No pending documents found")
+#     return None
 
 
 def update_document(id: str, status: str, error=None):

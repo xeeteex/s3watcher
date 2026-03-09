@@ -4,7 +4,7 @@ import time
 import tempfile
 import requests
 from supabase import create_client
-from app.core.database import get_next_pending_document, update_document, insert_ocr_result
+from app.core.database import update_document, insert_ocr_result
 from app.core.config import OCR_URL
 from app.core.config import SUPABASE_URL, SUPABASE_SERVICE_KEY
 from contextlib import contextmanager

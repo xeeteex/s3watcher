@@ -68,7 +68,7 @@ async def process_document(doc_id: str, bucket: str, key: str, sbdb: AsyncClient
     try:
         file_bytes = await download_file_from_supabase(sbdb, bucket, key)
 
-        with temp_pdf(file_bytes) as file_path:
+        async with temp_pdf(file_bytes) as file_path:
             ocr_result = await send_to_ocr(file_path, filename=key)
         logger.info(f"OCR processing completed for document {doc_id}")
 

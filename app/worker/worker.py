@@ -1,21 +1,19 @@
 import os
 import logging
-import time
 import tempfile
-import requests
-from supabase import create_client
-from app.core.database import update_document, insert_ocr_result
-from app.core.config import OCR_URL
-from app.core.config import SUPABASE_URL, SUPABASE_SERVICE_KEY
-from contextlib import contextmanager
+import httpx
+from supabase import AsyncClient
+from app.core.database import update_document, insert_ocr_result, insert_mapper_result
+from app.core.config import SUPABASE_URL, SUPABASE_SERVICE_KEY, OCR_URL, MAPPER_URL
+from contextlib import asynccontextmanager
 
 logger = logging.getLogger("app.worker")
 
-supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+# supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 
 
-@contextmanager
-def temp_pdf(data: bytes):
+@asynccontextmanager
+async def temp_pdf(data: bytes):
 
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
     try:
@@ -26,53 +24,69 @@ def temp_pdf(data: bytes):
         os.unlink(tmp.name)
 
 
-def download_file_from_supabase(bucket: str, key: str):
+async def download_file_from_supabase(sbdb: AsyncClient,bucket: str, key: str):
 
-   data = supabase.storage.from_(bucket).download(key)
+   data = await sbdb.storage.from_(bucket).download(key)
    logger.info(f"Downloaded file size: {len(data)}")
    return data
 
 
-
-def send_to_ocr(file_path: str, filename: str = "document.pdf") -> dict:
+async def send_to_ocr(file_path: str, filename: str = "document.pdf") -> dict:
+    
     file_size = os.path.getsize(file_path)
     logger.info("Sending to OCR: %s as '%s' (%d bytes)", file_path, filename, file_size)
-    with open(file_path, "rb") as f:
-        files = [("file_list", (filename, f, "application/pdf"))]
-        data = {"prompt": ""}
-        response = requests.post(
-            OCR_URL,
-            files=files,
-            data=data,
-            timeout=120,
-        )
+    async with httpx.AsyncClient(timeout=180) as client:
+        with open(file_path, "rb") as f:
+            files = [("file_list", (filename, f, "application/pdf"))]
+            data = {"prompt": ""}
+            response = await client.post(
+                OCR_URL,
+                files=files,
+                data=data,
+                timeout=120,
+            )
     response.raise_for_status()
     result = response.json()
     logger.info("OCR response status: %s, items: %d", result.get("status"), len(result.get("data", [])))
     return result
 
-def process_document(doc_id: str, bucket: str, key: str):
 
-    logger.info(f"Processing document {doc_id} from bucket {bucket} with key {key}")
-    update_document(doc_id, "processing")
+async def mapping_incoming_data(extracted_data: dict):
+
+    incoming_doc_id = extracted_data["data"][0]["document_id"]
+    api_url = f"{MAPPER_URL}/{incoming_doc_id}"
+    async with httpx.AsyncClient(timeout=60) as client:
+        response = await client.get(api_url)
+    mapped_data = response.json["mapped_result"]
+    return mapped_data
+
+
+async def process_document(doc_id: str, bucket: str, key: str, sbdb: AsyncClient):
+
+    await update_document(doc_id, "processing", sbdb)
 
     try:
-        file_bytes = download_file_from_supabase(bucket, key)
+        file_bytes = await download_file_from_supabase(sbdb, bucket, key)
 
         with temp_pdf(file_bytes) as file_path:
-            ocr_result = send_to_ocr(file_path, filename=key)
+            ocr_result = await send_to_ocr(file_path, filename=key)
         logger.info(f"OCR processing completed for document {doc_id}")
 
         ocr_data = ocr_result.get("data", [])
         if ocr_data:
-            insert_ocr_result(doc_id, ocr_data)
+            await insert_ocr_result(doc_id, ocr_data, sbdb)
         logger.info(f"OCR data inserted for document {doc_id}")
 
-        update_document(doc_id, "completed")
+        mapped_data = await mapping_incoming_data(ocr_result)
+        if mapped_data:
+            await insert_mapper_result(mapped_data, sbdb)
+        logger.info(f"Mapper data inserted for document {doc_id}")
+
+        await update_document(doc_id, "completed", sbdb)
 
     except Exception as e:
         logger.error(f"Error processing document {doc_id}: {str(e)}")
-        update_document(doc_id, "error")
+        await update_document(doc_id, "error", sbdb)
 
 
 # def process_one(doc: dict):

@@ -1,16 +1,20 @@
 import logging
-from supabase import create_client
+from fastapi import Request
+from supabase import AsyncClient
 from app.core.config import SUPABASE_URL, SUPABASE_SERVICE_KEY
 
 logger = logging.getLogger("app.database")
 
-supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
-logger.info("Supabase client initialized")
+# supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+# logger.info("Supabase client initialized")
+
+async def get_supabase_client(request: Request)-> AsyncClient:
+    return request.app.state.supabase
 
 
-def insert_document(bucket: str, key: str):
+async def insert_document(bucket: str, key: str, sbdb: AsyncClient):
     logger.info("Inserting document: bucket=%s key=%s", bucket, key)
-    result = supabase.table("documents").insert({
+    result = await sbdb.table("documents").insert({
         "bucket": bucket,
         "key": key,
         "status": "pending"
@@ -31,17 +35,17 @@ def insert_document(bucket: str, key: str):
 #     return None
 
 
-def update_document(id: str, status: str, error=None):
+async def update_document(id: str, status: str, sbdb: AsyncClient, error=None):
     logger.info("Updating document id=%s status=%s", id, status)
     payload = {"status": status}
     if error:
         payload["error"] = error
         logger.error("Document id=%s error: %s", id, error)
-    supabase.table("documents").update(payload).eq("id", id).execute()
+    await sbdb.table("documents").update(payload).eq("id", id).execute()
     logger.info("Document id=%s updated", id)
 
 
-def insert_ocr_result(document_id: str, ocr_data: list):
+async def insert_ocr_result(document_id: str, ocr_data: list, sbdb: AsyncClient):
     """Insert OCR results into the ocr_results table.
     ocr_data is the 'data' array from the OCR response.
     Each item has file_name, content, and extracted_text.
@@ -55,5 +59,25 @@ def insert_ocr_result(document_id: str, ocr_data: list):
             "content": item.get("content"),
             "extracted_text": item.get("extracted_text"),
         })
-    supabase.table("ocr_results").insert(rows).execute()
+    await sbdb.table("ocr_results").insert(rows).execute()
     logger.info("OCR results inserted for document_id=%s", document_id)
+
+async def insert_mapper_result(mapped_data: dict, sbdb: AsyncClient):
+
+    rows = []
+    for item in mapped_data["Doclines"]:
+        rows.append({
+            "CardName": mapped_data.get("CardName"),
+            "CardCode": mapped_data.get("CardCode"),
+            "DocDate": mapped_data.get("DocDate"),
+            "DocLines": mapped_data.get("DocumentLines", []),
+            "ItemCode": item.get("ItemCode"),
+            "Description": item.get("Description"),
+            "Quantity": item.get("Quantity"),
+            "TaxCode": item.get("TaxCode"),
+            "UnitPrice": item.get("UnitPrice")
+        })
+
+
+    await sbdb.table("mapped_results").insert(rows).execute()
+    logger.info("Mapped results inserted ")

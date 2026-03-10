@@ -1,15 +1,15 @@
 import logging
-from fastapi import APIRouter
-from app.core.database import insert_document
+from fastapi import APIRouter, Depends
+from supabase import AsyncClient
+from app.core.database import insert_document, get_supabase_client
 from app.worker.worker import process_document
-import os
 
 logger = logging.getLogger("app.webhook")
 
 router = APIRouter()
 
 @router.post("/storage-webhook")
-async def storage_webhook(payload: dict):
+async def storage_webhook(payload: dict, sbdb: AsyncClient = Depends(get_supabase_client)):
 
     logger.info("Received webhook payload: %s", payload)
 
@@ -24,7 +24,7 @@ async def storage_webhook(payload: dict):
 
     # 1. Insert as pending
     logger.info("Inserting document: bucket=%s key=%s", bucket, key)
-    doc = insert_document(bucket, key)
+    doc = await insert_document(bucket, key, sbdb)
     doc_id = doc.get("id") if doc else None
     logger.info("Document queued: id=%s", doc_id)
 
@@ -61,7 +61,7 @@ async def storage_webhook(payload: dict):
     #         os.unlink(file_path)
     #         logger.info("Cleaned up temp file")
 
-    process_document(doc_id, bucket, key)
+    await process_document(doc_id, bucket, key, sbdb)
     return {"status": "success", "document_id": doc_id}
 
 

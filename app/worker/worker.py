@@ -53,8 +53,8 @@ async def send_to_ocr(file_path: str, filename: str = "document.pdf") -> dict:
 
 async def mapping_incoming_data(extracted_data: dict):
 
-    incoming_doc_id = extracted_data["data"][0]["document_id"]
-    api_url = f"{MAPPER_URL}/{incoming_doc_id}"
+    incoming_doc_id = str(extracted_data["data"][0]["document_id"]).strip()
+    api_url = f"{MAPPER_URL.strip()}/{incoming_doc_id}"
     async with httpx.AsyncClient(timeout=60) as client:
         response = await client.get(api_url)
     mapped_data = response.json["mapped_result"]

@@ -14,8 +14,8 @@ class Settings(BaseSettings):
 
 settings = Settings()
 
-SUPABASE_URL = settings.SUPABASE_URL
-SUPABASE_SERVICE_KEY = settings.SUPABASE_SERVICE_KEY
-OCR_URL = settings.OCR_URL
-MAPPER_URL = settings.MAPPER_URL
+SUPABASE_URL = settings.SUPABASE_URL.strip()
+SUPABASE_SERVICE_KEY = settings.SUPABASE_SERVICE_KEY.strip()
+OCR_URL = settings.OCR_URL.strip()
+MAPPER_URL = settings.MAPPER_URL.strip()
 

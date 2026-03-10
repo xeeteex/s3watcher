@@ -69,8 +69,7 @@ def main():
     print(Descripton)
     print(Quantity)
     print(TaxCode)
-
-        
+    print(UnitPrice)
 
 
 if __name__ == "__main__":

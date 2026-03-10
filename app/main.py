@@ -13,6 +13,7 @@ logging.basicConfig(
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.supabase = await acreate_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+    yield
 
 logger = logging.getLogger("app")
 

@@ -57,7 +57,7 @@ async def mapping_incoming_data(extracted_data: dict):
     api_url = f"{MAPPER_URL.strip()}/{incoming_doc_id}"
     async with httpx.AsyncClient(timeout=60) as client:
         response = await client.get(api_url)
-    mapped_data = response.json["mapped_result"]
+    mapped_data = response.json()["mapped_result"]
     return mapped_data
 
 

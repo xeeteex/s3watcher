@@ -67,15 +67,15 @@ async def insert_mapper_result(mapped_data: dict, sbdb: AsyncClient):
     rows = []
     for item in mapped_data["DocumentLines"]:
         rows.append({
-            "CardName": mapped_data.get("CardName"),
-            "CardCode": mapped_data.get("CardCode"),
-            "DocDate": mapped_data.get("DocDate"),
-            "DocLines": mapped_data.get("DocumentLines", []),
-            "ItemCode": item.get("ItemCode"),
-            "Description": item.get("Description"),
-            "Quantity": item.get("Quantity"),
-            "TaxCode": item.get("TaxCode"),
-            "UnitPrice": item.get("UnitPrice")
+            "CardName": mapped_data.get("CardName") or None,
+            "CardCode": mapped_data.get("CardCode") or None,
+            "DocDate": mapped_data.get("DocDate") or None,
+            "DocLines": mapped_data.get("DocumentLines", []) or None,
+            "ItemCode": item.get("ItemCode") or None,
+            "Description": item.get("Description") or None,
+            "Quantity": item.get("Quantity") or None,
+            "TaxCode": item.get("TaxCode") or None,
+            "UnitPrice": item.get("UnitPrice") or None
         })
 
 

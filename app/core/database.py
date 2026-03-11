@@ -65,7 +65,7 @@ async def insert_ocr_result(document_id: str, ocr_data: list, sbdb: AsyncClient)
 async def insert_mapper_result(mapped_data: dict, sbdb: AsyncClient):
 
     rows = []
-    for item in mapped_data["Doclines"]:
+    for item in mapped_data["DocLines"]:
         rows.append({
             "CardName": mapped_data.get("CardName"),
             "CardCode": mapped_data.get("CardCode"),

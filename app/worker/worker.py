@@ -56,7 +56,7 @@ async def approve_ocr_result(extracted_data:str):
     incoming_doc_id = str(extracted_data["data"][0]["document_id"]).strip()
     aproval_api_url = f"{REVIEW_URL.strip()}/{incoming_doc_id}/approve"
     async with httpx.AsyncClient(timeout=60) as client:
-        response = await client.post(aproval_api_url)
+        response = await client.get(aproval_api_url)
     return response.json()
 
 

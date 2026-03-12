@@ -4,7 +4,7 @@ import tempfile
 import httpx
 from supabase import AsyncClient
 from app.core.database import update_document, insert_ocr_result, insert_mapper_result
-from app.core.config import SUPABASE_URL, SUPABASE_SERVICE_KEY, OCR_URL, MAPPER_URL
+from app.core.config import OCR_URL, MAPPER_URL, REVIEW_URL, SAP_PURCHASE_API_URL
 from contextlib import asynccontextmanager
 
 logger = logging.getLogger("app.worker")
@@ -51,14 +51,31 @@ async def send_to_ocr(file_path: str, filename: str = "document.pdf") -> dict:
     return result
 
 
+async def approve_ocr_result(extracted_data:str):
+
+    incoming_doc_id = str(extracted_data["data"][0]["document_id"]).strip()
+    aproval_api_url = f"{REVIEW_URL.strip()}/{incoming_doc_id}/approve"
+    async with httpx.AsyncClient(timeout=60) as client:
+        response = await client.post(aproval_api_url)
+    return response.json()
+
+
 async def mapping_incoming_data(extracted_data: dict):
 
     incoming_doc_id = str(extracted_data["data"][0]["document_id"]).strip()
-    api_url = f"{MAPPER_URL.strip()}/{incoming_doc_id}"
+    mapping_api_url = f"{MAPPER_URL.strip()}/{incoming_doc_id}"
     async with httpx.AsyncClient(timeout=60) as client:
-        response = await client.get(api_url)
+        response = await client.get(mapping_api_url)
     mapped_data = response.json()["mapped_result"]
     return mapped_data
+
+
+async def post_to_sap(extracted_data: dict):
+    incoming_doc_id = str(extracted_data["data"][0]["document_id"]).strip()
+    sap_api_url = f"{SAP_PURCHASE_API_URL.strip()}?document_id={incoming_doc_id}"
+    async with httpx.AsyncClient(timeout=60) as client:
+        response = await client.post(sap_api_url)
+    return response.json()
 
 
 async def process_document(doc_id: str, bucket: str, key: str, sbdb: AsyncClient):
@@ -77,10 +94,16 @@ async def process_document(doc_id: str, bucket: str, key: str, sbdb: AsyncClient
             await insert_ocr_result(doc_id, ocr_data, sbdb)
         logger.info(f"OCR data inserted for document {doc_id}")
 
+        await approve_ocr_result(ocr_result)
+        logger.info(f"OCR result approved for document {doc_id}")
+
         mapped_data = await mapping_incoming_data(ocr_result)
         if mapped_data:
             await insert_mapper_result(mapped_data, sbdb)
         logger.info(f"Mapper data inserted for document {doc_id}")
+
+        await post_to_sap(ocr_result)
+        logger.info(f"Posted to SAP for document {doc_id}")
 
         await update_document(doc_id, "completed", sbdb)
 

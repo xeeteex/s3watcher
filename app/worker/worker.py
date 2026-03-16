@@ -35,7 +35,7 @@ async def send_to_ocr(file_path: str, filename: str = "document.pdf") -> dict:
     
     file_size = os.path.getsize(file_path)
     logger.info("Sending to OCR: %s as '%s' (%d bytes)", file_path, filename, file_size)
-    async with httpx.AsyncClient(timeout=180) as client:
+    async with httpx.AsyncClient(timeout=240) as client:
         with open(file_path, "rb") as f:
             files = [("file_list", (filename, f, "application/pdf"))]
             data = {"prompt": ""}
@@ -43,7 +43,7 @@ async def send_to_ocr(file_path: str, filename: str = "document.pdf") -> dict:
                 OCR_URL,
                 files=files,
                 data=data,
-                timeout=120,
+                timeout=240,
             )
     response.raise_for_status()
     result = response.json()
@@ -55,7 +55,7 @@ async def approve_ocr_result(extracted_data:str):
 
     incoming_doc_id = str(extracted_data["data"][0]["document_id"]).strip()
     aproval_api_url = f"{REVIEW_URL.strip()}/{incoming_doc_id}/approve"
-    async with httpx.AsyncClient(timeout=60) as client:
+    async with httpx.AsyncClient(timeout=120) as client:
         response = await client.get(aproval_api_url)
     return response.json()
 
@@ -64,7 +64,7 @@ async def mapping_incoming_data(extracted_data: dict):
 
     incoming_doc_id = str(extracted_data["data"][0]["document_id"]).strip()
     mapping_api_url = f"{MAPPER_URL.strip()}/{incoming_doc_id}"
-    async with httpx.AsyncClient(timeout=60) as client:
+    async with httpx.AsyncClient(timeout=120) as client:
         response = await client.get(mapping_api_url)
     mapped_data = response.json()["mapped_result"]
     return mapped_data
@@ -73,7 +73,7 @@ async def mapping_incoming_data(extracted_data: dict):
 async def post_to_sap(extracted_data: dict):
     incoming_doc_id = str(extracted_data["data"][0]["document_id"]).strip()
     sap_api_url = f"{SAP_PURCHASE_API_URL.strip()}?document_id={incoming_doc_id}"
-    async with httpx.AsyncClient(timeout=60) as client:
+    async with httpx.AsyncClient(timeout=120) as client:
         response = await client.post(sap_api_url)
     return response.json()
 
@@ -109,7 +109,7 @@ async def process_document(doc_id: str, bucket: str, key: str, sbdb: AsyncClient
 
     except Exception as e:
         logger.error(f"Error processing document {doc_id}: {str(e)}")
-        await update_document(doc_id, "error", sbdb)
+        await update_document(doc_id, "failed", sbdb)
 
 
 # def process_one(doc: dict):

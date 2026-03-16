@@ -29,7 +29,7 @@ async def storage_webhook(payload: dict, sbdb: AsyncClient = Depends(get_supabas
     logger.info("Document queued: id=%s", doc_id)
 
     if not doc_id:
-        return {"status": "error", "detail": "Failed to insert document"}
+        return {"status": "failed", "detail": "Failed to insert document"}
 
     # update_document(doc_id, "processing")
     # file_path = None

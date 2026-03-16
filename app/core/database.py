@@ -38,11 +38,11 @@ async def insert_document(bucket: str, key: str, sbdb: AsyncClient):
 async def update_document(id: str, status: str, sbdb: AsyncClient, error=None):
     logger.info("Updating document id=%s status=%s", id, status)
     payload = {"status": status}
-    if error:
-        payload["error"] = error
-        logger.error("Document id=%s error: %s", id, error)
+    # if error:
+    #     payload["error"] = error
+    #     logger.error("Document id=%s error: %s", id, error)
     await sbdb.table("documents").update(payload).eq("id", id).execute()
-    logger.info("Document id=%s updated", id)
+    logger.info("Document id=%s updated and error = %s", id, error)
 
 
 async def insert_ocr_result(document_id: str, ocr_data: list, sbdb: AsyncClient):

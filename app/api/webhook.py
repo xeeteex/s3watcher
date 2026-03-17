@@ -15,7 +15,7 @@ async def handle_webhook(payload: dict, supabasedb: AsyncClient = Depends(get_su
 
     try:
         record = payload.get("record", {})
-        bucket = record.get("bucket", "")
+        bucket = record.get("bucket_id", "") or record.get("bucket", "")
         name = record.get("name", "")
 
         doc = await insert_document(bucket, name, supabasedb)

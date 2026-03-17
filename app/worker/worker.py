@@ -60,7 +60,9 @@ async def mapping_incoming_data(document_id: int):
     mapping_api_url = f"{settings.MAPPER_URL.strip()}/{document_id}"
     async with httpx.AsyncClient(timeout=60) as client:
         response = await client.get(mapping_api_url)
-    mapped_data = response.json()["mapped_result"]
+    response_json = response.json()
+    logger.info("Mapper API response for document_id=%s: %s", document_id, response_json)
+    mapped_data = response_json["mapped_result"]
     return mapped_data
 
 

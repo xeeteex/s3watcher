@@ -1,67 +1,64 @@
 import logging
 from fastapi import APIRouter, Depends
+from fastapi.responses import JSONResponse
 from supabase import AsyncClient
-from app.core.database import insert_document, get_supabase_client
-from app.worker.worker import process_document
+from app.core.database import get_supabase_client, insert_document
+from app.worker.worker import process_document, continue_after_review
 
-logger = logging.getLogger("app.webhook")
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
 
-router = APIRouter()
+router = APIRouter(prefix="/webhook", tags=["Webhook"])
 
-@router.post("/storage-webhook")
-async def storage_webhook(payload: dict, sbdb: AsyncClient = Depends(get_supabase_client)):
+@router.post("/webhook", summary="Handle file upload webhook in Supabase", description="Endpoint to handle file upload webhook from Supabase storage.")
+async def handle_webhook(payload: dict, supabasedb: AsyncClient = Depends(get_supabase_client)):
 
-    logger.info("Received webhook payload: %s", payload)
+    try:
+        record = payload.get("record", {})
+        bucket = record.get("bucket", "")
+        name = record.get("name", "")
 
-    record = payload.get("record", {})
+        doc = await insert_document(bucket, name, supabasedb)
+        doc_id = doc["id"] if doc else None
 
-    bucket = record.get("bucket_id")
-    key = record.get("name")
+        if not doc_id:
+            return JSONResponse(status_code=500, content={"status": "error", "detail": "Failed to insert document"})
 
-    if not bucket or not key:
-        logger.warning("Ignored: missing bucket_id or name in record: %s", record)
-        return {"status": "ignored"}
+        mongo_doc_id = await process_document(doc_id, bucket, name, supabasedb)
+        logger.info(f"Document processed of id: {doc_id}, mongo_doc_id: {mongo_doc_id}")
+        return JSONResponse(status_code=200, content={"document_id": doc_id, "mongo_doc_id": mongo_doc_id, "status": "pending_review"})
 
-    # 1. Insert as pending
-    logger.info("Inserting document: bucket=%s key=%s", bucket, key)
-    doc = await insert_document(bucket, key, sbdb)
-    doc_id = doc.get("id") if doc else None
-    logger.info("Document queued: id=%s", doc_id)
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "status": "error",
+                "message": str(e)
+            }
+        )
 
-    if not doc_id:
-        return {"status": "failed", "detail": "Failed to insert document"}
 
-    # update_document(doc_id, "processing")
-    # file_path = None
-    # try:
-    #     logger.info("Downloading: bucket=%s key=%s", bucket, key)
-    #     file_path = download_from_supabase(bucket, key)
-    #     logger.info("Downloaded %d bytes", os.path.getsize(file_path))
+@router.post("/continue/{mongo_doc_id}", summary="Continue processing after human review", description="Triggers mapper and SAP posting for an approved document.")
+async def handle_continue_after_review(mongo_doc_id: int, supabasedb: AsyncClient = Depends(get_supabase_client)):
 
-    #     logger.info("Sending to OCR: %s", key)
-    #     ocr_result = send_to_ocr(file_path, filename=key)
-    #     logger.info("OCR completed for %s", key)
+    try:
+        await continue_after_review(mongo_doc_id, supabasedb)
+        logger.info(f"Post-review processing completed for mongo_doc_id: {mongo_doc_id}")
+        return JSONResponse(status_code=200, content={"mongo_doc_id": mongo_doc_id, "status": "completed"})
 
-    #     ocr_data = ocr_result.get("data", [])
-    #     if ocr_data:
-    #         insert_ocr_result(doc_id, ocr_data)
-    #         logger.info("Inserted %d OCR result(s) for id=%s", len(ocr_data), doc_id)
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "status": "error",
+                "mongo_doc_id": mongo_doc_id,
+                "message": str(e)
+            }
+        )
+    
+    
 
-    #     update_document(doc_id, "completed")
-    #     logger.info("Document id=%s completed", doc_id)
-    #     return {"status": "completed", "id": doc_id}
 
-    # except Exception as e:
-    #     logger.exception("Error processing document id=%s: %s", doc_id, e)
-    #     update_document(doc_id, "error", error=str(e))
-    #     return {"status": "error", "id": doc_id, "detail": str(e)}
 
-    # finally:
-    #     if file_path and os.path.exists(file_path):
-    #         os.unlink(file_path)
-    #         logger.info("Cleaned up temp file")
-
-    await process_document(doc_id, bucket, key, sbdb)
-    return {"status": "success", "document_id": doc_id}
 
 

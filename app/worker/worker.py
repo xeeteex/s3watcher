@@ -1,20 +1,18 @@
-import os
 import logging
 import tempfile
+import os
 import httpx
 from supabase import AsyncClient
-from app.core.database import update_document, insert_ocr_result, insert_mapper_result
-from app.core.config import OCR_URL, MAPPER_URL, REVIEW_URL, SAP_PURCHASE_API_URL
 from contextlib import asynccontextmanager
+from ..core.config import settings
+from ..core.database import update_document_status_in_supabase, insert_mapper_result_to_supabase, insert_ocr_result_to_supabase
 
-logger = logging.getLogger("app.worker")
-
-# supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def temp_pdf(data: bytes):
-
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
     try:
         tmp.write(data)
@@ -22,153 +20,145 @@ async def temp_pdf(data: bytes):
         yield tmp.name
     finally:
         os.unlink(tmp.name)
-
-
-async def download_file_from_supabase(sbdb: AsyncClient,bucket: str, key: str):
-
-   data = await sbdb.storage.from_(bucket).download(key)
-   logger.info(f"Downloaded file size: {len(data)}")
-   return data
-
-
-async def send_to_ocr(file_path: str, filename: str = "document.pdf") -> dict:
     
-    file_size = os.path.getsize(file_path)
-    logger.info("Sending to OCR: %s as '%s' (%d bytes)", file_path, filename, file_size)
-    async with httpx.AsyncClient(timeout=240) as client:
-        with open(file_path, "rb") as f:
-            files = [("file_list", (filename, f, "application/pdf"))]
+
+async def download_file_from_supabase(supabasedb: AsyncClient, bucket: str, name: str):
+
+    file = await supabasedb.storage.from_(bucket).download(name)
+    logger.info(f"Downloaded file of size {len(file)} bytes from Supabase storage: bucket={bucket}, name={name}")
+    return file
+
+
+async def upload_file_to_ocr(filepath: str, filename: str):
+
+    async with httpx.AsyncClient(timeout=180) as client:
+        with open(filepath, "rb") as f:
+            files= [("filelist",(filename, f, "application/pdf"))]
             data = {"prompt": ""}
             response = await client.post(
-                OCR_URL,
-                files=files,
-                data=data,
-                timeout=240,
+                settings.OCR_URL,
+                files = files,
+                data = data,
+                timeout = 180
             )
-    response.raise_for_status()
-    result = response.json()
-    logger.info("OCR response status: %s, items: %d", result.get("status"), len(result.get("data", [])))
-    return result
+        response.raise_for_status()
+        ocr_data = response.json()
+        return ocr_data
+    
+
+# async def approve_ocr_result(ocr_data: dict):
+
+#     document_id = str(ocr_data["data"][0]["document_id"]).strip()
+#     aproval_api_url = f"{settings.REVIEW_URL.strip()}/{document_id}/approve"
+#     async with httpx.AsyncClient(timeout=60) as client:
+#         response = await client.get(aproval_api_url)
+#     return response.json()
 
 
-async def approve_ocr_result(extracted_data:str):
+async def mapping_incoming_data(document_id: int):
 
-    incoming_doc_id = str(extracted_data["data"][0]["document_id"]).strip()
-    aproval_api_url = f"{REVIEW_URL.strip()}/{incoming_doc_id}/approve"
-    async with httpx.AsyncClient(timeout=120) as client:
-        response = await client.get(aproval_api_url)
-    return response.json()
-
-
-async def mapping_incoming_data(extracted_data: dict):
-
-    incoming_doc_id = str(extracted_data["data"][0]["document_id"]).strip()
-    mapping_api_url = f"{MAPPER_URL.strip()}/{incoming_doc_id}"
-    async with httpx.AsyncClient(timeout=120) as client:
+    mapping_api_url = f"{settings.MAPPER_URL.strip()}/{document_id}"
+    async with httpx.AsyncClient(timeout=60) as client:
         response = await client.get(mapping_api_url)
     mapped_data = response.json()["mapped_result"]
     return mapped_data
 
 
-async def post_to_sap(extracted_data: dict):
-    incoming_doc_id = str(extracted_data["data"][0]["document_id"]).strip()
-    sap_api_url = f"{SAP_PURCHASE_API_URL.strip()}?document_id={incoming_doc_id}"
-    async with httpx.AsyncClient(timeout=120) as client:
+async def post_to_sap(document_id: int):
+    
+    sap_api_url = f"{settings.SAP_PURCHASE_API_URL.strip()}?document_id={document_id}"
+    async with httpx.AsyncClient(timeout=60) as client:
         response = await client.post(sap_api_url)
     return response.json()
 
 
-async def process_document(doc_id: str, bucket: str, key: str, sbdb: AsyncClient):
-
-    await update_document(doc_id, "processing", sbdb)
+async def continue_after_review(mongo_doc_id: int, supabasedb: AsyncClient):
 
     try:
-        file_bytes = await download_file_from_supabase(sbdb, bucket, key)
+        result = await supabasedb.table("documents").select("id").eq("mongo_doc_id", mongo_doc_id).single().execute()
+        supabase_doc_id = result.data["id"]
+        await update_document_status_in_supabase(supabase_doc_id, "mapper_processing", supabasedb)
+
+        mapped_data = await mapping_incoming_data(mongo_doc_id)
+        if mapped_data:
+            await insert_mapper_result_to_supabase(mapped_data, supabasedb, document_id=supabase_doc_id, mongo_doc_id=mongo_doc_id)
+        logger.info(f"Mapper completed for document {mongo_doc_id}")
+
+        await update_document_status_in_supabase(supabase_doc_id, "sap_processing", supabasedb)
+        await post_to_sap(mongo_doc_id)
+        logger.info(f"SAP post completed for document {mongo_doc_id}")
+
+        await update_document_status_in_supabase(supabase_doc_id, "completed", supabasedb)
+
+    except Exception as e:
+        logger.error(f"Error in post-review processing for document {mongo_doc_id}: {str(e)}", exc_info=True)
+        raise
+
+
+async def process_document(doc_id: str, bucket: str, key: str, supabasedb: AsyncClient):
+
+    try:
+        
+        # OCR Processing
+        await update_document_status_in_supabase(doc_id, "ocr_processing", supabasedb)
+
+        file_bytes = await download_file_from_supabase(supabasedb, bucket, key)
 
         async with temp_pdf(file_bytes) as file_path:
-            ocr_result = await send_to_ocr(file_path, filename=key)
+            ocr_result = await upload_file_to_ocr(file_path, filename=key)
         logger.info(f"OCR processing completed for document {doc_id}")
 
         ocr_data = ocr_result.get("data", [])
         if ocr_data:
-            await insert_ocr_result(doc_id, ocr_data, sbdb)
+            await insert_ocr_result_to_supabase(doc_id, ocr_data, supabasedb)
         logger.info(f"OCR data inserted for document {doc_id}")
 
-        await approve_ocr_result(ocr_result)
-        logger.info(f"OCR result approved for document {doc_id}")
 
-        mapped_data = await mapping_incoming_data(ocr_result)
-        if mapped_data:
-            await insert_mapper_result(mapped_data, sbdb)
-        logger.info(f"Mapper data inserted for document {doc_id}")
+        mongo_doc_id = ocr_result["data"][0]["document_id"]
+        await supabasedb.table("documents").update({
+           "status": "pending_review",
+            "mongo_doc_id": mongo_doc_id
+        }).eq("id", doc_id).execute()
+        logger.info(f"Document {doc_id} set to pending_review with mongo_doc_id={mongo_doc_id}")
+        return mongo_doc_id
 
-        await post_to_sap(ocr_result)
-        logger.info(f"Posted to SAP for document {doc_id}")
+        # Pending Review
+        # await supabasedb.table("documents").update({"mongo_uid": ocr_result.get("document_id", "")}).eq("id", doc_id).execute()
+        # await update_document_status_in_supabase(supabasedb, doc_id, "pending_review")
 
-        await update_document(doc_id, "completed", sbdb)
+
+
+
+        # await approve_ocr_result(ocr_result)
+        # logger.info(f"OCR result approved for document {doc_id}")
+
+        # #Mapper Processing
+        # await update_document_status_in_supabase(supabasedb, doc_id, "mapper_processing")
+
+        # mapped_data = await mapping_incoming_data(ocr_result)
+        # if mapped_data:
+        #     await insert_mapper_result_to_supabase(mapped_data, supabasedb)
+        # logger.info(f"Mapper data inserted for document {doc_id}")
+
+        # #Sap Processing
+        # await update_document_status_in_supabase(supabasedb, doc_id, "sap_processing")
+
+        # await post_to_sap(ocr_result)
+        # logger.info(f"Posted to SAP for document {doc_id}")
+
+        # await update_document_status_in_supabase(supabasedb, doc_id, "completed")
+
+
 
     except Exception as e:
-        logger.error(f"Error processing document {doc_id}: {str(e)}")
-        await update_document(doc_id, "failed", sbdb)
+        # fetch the current status to know which step failed
+        # response = await supabasedb.table("documents").select("status").eq("id", doc_id).single().execute()
+        # failed_step = response.data.get("status", "unknown").replace("_processing", "_error")
 
 
-# def process_one(doc: dict):
-#     """Process a single claimed document (already status=processing)."""
-#     doc_id = doc["id"]
-#     bucket = doc["bucket"]
-#     key = doc["key"]
+        result = await supabasedb.table("documents").select("status").eq("id", doc_id).single().execute()
+        failed_step = result.data.get("status", "unknown").replace("_processing", "_error")
 
-#     logger.info("=== Processing document id=%s bucket=%s key=%s ===", doc_id, bucket, key)
-
-#     file_path = None
-#     try:
-#         file_path = download_from_supabase(bucket, key)
-
-#         ocr_result = send_to_ocr(file_path, filename=key)
-
-#         ocr_data = ocr_result.get("data", [])
-#         if ocr_data:
-#             insert_ocr_result(doc_id, ocr_data)
-
-#         update_document(doc_id, "completed")
-#         logger.info("=== Document id=%s completed ===", doc_id)
-
-#     except Exception as e:
-#         logger.exception("Error processing document id=%s: %s", doc_id, e)
-#         update_document(doc_id, "error", error=str(e))
-
-#     finally:
-#         if file_path and os.path.exists(file_path):
-#             os.unlink(file_path)
-#             logger.info("Cleaned up temp file: %s", file_path)
-
-
-# def drain_queue() -> int:
-#     """Claim and process pending documents one-by-one until none remain.
-#     Returns the number of documents processed.
-#     """
-#     processed = 0
-#     while True:
-#         doc = get_next_pending_document()
-#         if not doc:
-#             logger.info("Queue empty, no more pending documents")
-#             break
-#         process_one(doc)
-#         processed += 1
-#     return processed
-
-
-# def run_worker(poll_interval: int = 5):
-#     """Standalone polling worker (for non-serverless environments)."""
-#     logger.info("Worker started. Polling every %ds for pending documents...", poll_interval)
-#     while True:
-#         count = drain_queue()
-#         if count == 0:
-#             logger.debug("No pending documents. Waiting %ds...", poll_interval)
-#             time.sleep(poll_interval)
-
-
-# if __name__ == "__main__":
-#     run_worker()
-
-
+        logger.error(f"Failed at {failed_step} for doc={doc_id}: {e}", exc_info=True)
+        await update_document_status_in_supabase(doc_id, failed_step, supabasedb)
+        raise

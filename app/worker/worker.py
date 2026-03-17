@@ -60,9 +60,25 @@ async def mapping_incoming_data(document_id: int):
     mapping_api_url = f"{settings.MAPPER_URL.strip()}/{document_id}"
     async with httpx.AsyncClient(timeout=60) as client:
         response = await client.get(mapping_api_url)
+    try:
+        response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        detail = None
+        try:
+            detail = response.json().get("detail")
+        except Exception:
+            detail = response.text
+
+        message = f"Mapper API returned {response.status_code} for document_id={document_id}"
+        if detail:
+            message = f"{message}: {detail}"
+        raise RuntimeError(message) from exc
+
     response_json = response.json()
     logger.info("Mapper API response for document_id=%s: %s", document_id, response_json)
-    mapped_data = response_json["mapped_result"]
+    mapped_data = response_json.get("mapped_result")
+    if mapped_data is None:
+        raise RuntimeError(f"Mapper response missing 'mapped_result' for document_id={document_id}")
     return mapped_data
 
 
@@ -76,6 +92,7 @@ async def post_to_sap(document_id: int):
 
 async def continue_after_review(mongo_doc_id: int, supabasedb: AsyncClient):
 
+    supabase_doc_id = None
     try:
         result = await supabasedb.table("documents").select("id").eq("mongo_doc_id", mongo_doc_id).single().execute()
         supabase_doc_id = result.data["id"]
@@ -93,6 +110,13 @@ async def continue_after_review(mongo_doc_id: int, supabasedb: AsyncClient):
         await update_document_status_in_supabase(supabase_doc_id, "completed", supabasedb)
 
     except Exception as e:
+        if supabase_doc_id:
+            try:
+                status_result = await supabasedb.table("documents").select("status").eq("id", supabase_doc_id).single().execute()
+                failed_step = status_result.data.get("status", "unknown").replace("_processing", "_error")
+                await update_document_status_in_supabase(supabase_doc_id, failed_step, supabasedb)
+            except Exception:
+                logger.warning("Failed to update error status for mongo_doc_id=%s", mongo_doc_id, exc_info=True)
         logger.error(f"Error in post-review processing for document {mongo_doc_id}: {str(e)}", exc_info=True)
         raise
 

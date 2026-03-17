@@ -33,7 +33,7 @@ async def upload_file_to_ocr(filepath: str, filename: str):
 
     async with httpx.AsyncClient(timeout=180) as client:
         with open(filepath, "rb") as f:
-            files= [("filelist",(filename, f, "application/pdf"))]
+            files= [("file_list",(filename, f, "application/pdf"))]
             data = {"prompt": ""}
             response = await client.post(
                 settings.OCR_URL.strip(),
